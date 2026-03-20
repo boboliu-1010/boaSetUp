@@ -164,6 +164,33 @@ api_base_url = os.environ["AINFT_API_BASE_URL"].rstrip("/")
 api_key = os.environ["AINFT_API_KEY"].strip()
 output_file = os.environ["AINFT_MODEL_OUTPUT"]
 
+FALLBACK_GROUPS = [
+    {
+        "key": "openai",
+        "title": "OpenAI",
+        "models": [
+            {"id": "gpt-5.2", "name": "gpt-5.2"},
+            {"id": "gpt-5.2-mini", "name": "gpt-5.2-mini"},
+            {"id": "gpt-5-nano", "name": "gpt-5-nano"},
+        ],
+    },
+    {
+        "key": "anthropic",
+        "title": "Claude",
+        "models": [
+            {"id": "claude-sonnet-4-6", "name": "claude-sonnet-4-6"},
+        ],
+    },
+    {
+        "key": "google",
+        "title": "Gemini",
+        "models": [
+            {"id": "gemini-2.5-pro", "name": "gemini-2.5-pro"},
+            {"id": "gemini-2.5-flash", "name": "gemini-2.5-flash"},
+        ],
+    },
+]
+
 def post_raw(url, payload, headers=None):
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers=headers or {}, method="POST")
@@ -227,38 +254,49 @@ except Exception as exc:
     print(f"ERROR: API key validation failed: {exc}", file=sys.stderr)
     raise SystemExit(1)
 
+all_models = []
+groups = []
+
 try:
     models_resp = get_json(f"{api_base_url}/models", headers=headers)
 except Exception as exc:
-    print(f"ERROR: Failed to fetch dynamic model list: {exc}", file=sys.stderr)
-    raise SystemExit(1)
+    print(f"WARN: Failed to fetch dynamic model list; using fallback models. {exc}", file=sys.stderr)
+    groups = FALLBACK_GROUPS
+else:
+    seen = set()
+    group_map = {}
+    for item in (models_resp.get("data") or []):
+        model_id = item.get("id") or item.get("name")
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        provider_key, title = provider_key_for_model(model_id)
+        group = group_map.setdefault(provider_key, {"key": provider_key, "title": title, "models": []})
+        model = {"id": model_id, "name": model_id}
+        group["models"].append(model)
+    groups = [group_map[key] for key in ("openai", "anthropic", "google", "other") if key in group_map]
+    if not groups:
+        print("WARN: No models were returned by BankOfAI /models; using fallback models.", file=sys.stderr)
+        groups = FALLBACK_GROUPS
 
-all_models = []
 seen = set()
-group_map = {}
-for item in (models_resp.get("data") or []):
-    model_id = item.get("id") or item.get("name")
-    if not model_id or model_id in seen:
-        continue
-    seen.add(model_id)
-    provider_key, title = provider_key_for_model(model_id)
-    group = group_map.setdefault(provider_key, {"key": provider_key, "title": title, "models": []})
-    model = {"id": model_id, "name": model_id}
-    group["models"].append(model)
-    all_models.append(model)
-
-groups = [group_map[key] for key in ("openai", "anthropic", "google", "other") if key in group_map]
-
-if not all_models:
-    print("ERROR: No models were returned by BankOfAI /models.", file=sys.stderr)
-    raise SystemExit(1)
+for group in groups:
+    deduped = []
+    for model in group["models"]:
+        model_id = model.get("id")
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        deduped.append(model)
+        all_models.append(model)
+    group["models"] = deduped
 
 with open(output_file, "w", encoding="utf-8") as f:
     json.dump({"groups": groups, "all": all_models}, f, ensure_ascii=False, indent=2)
 PY
 
 echo -e "${GREEN}API key validation passed${NC}"
-echo -e "${GREEN}Dynamic model list fetched${NC}"
+echo -e "${GREEN}Model list prepared${NC}"
 echo ""
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -371,7 +409,7 @@ import sys
 for m in json.loads(sys.argv[1]):
     mid = m.get("id")
     if mid:
-        print(f"ainft/{mid}")
+        print(f"bankofai/{mid}")
 PY
         )"
         while IFS= read -r line; do
@@ -393,29 +431,29 @@ EOF
         if [[ "$default_choice" =~ ^[0-9]+$ ]] && [ "$default_choice" -ge 1 ] && [ "$default_choice" -le "${#ENABLED_MODELS[@]}" ]; then
             DEFAULT_MODEL="${ENABLED_MODELS[$((default_choice - 1))]}"
         elif [ "$default_choice" = "$custom_idx" ]; then
-            prompt_tty custom_model "Enter custom model ID (e.g., ainft/gpt-5.2): "
+            prompt_tty custom_model "Enter custom model ID (e.g., bankofai/gpt-5.2): "
             DEFAULT_MODEL="$custom_model"
         else
             DEFAULT_MODEL="${ENABLED_MODELS[0]}"
         fi
     else
         echo "Recommended models:"
-        echo "1) ainft/gpt-5-nano (Recommended)"
-        echo "2) ainft/gpt-5-mini"
-        echo "3) ainft/claude-sonnet-4-6"
+        echo "1) bankofai/gpt-5.2 (Recommended)"
+        echo "2) bankofai/gpt-5.2-mini"
+        echo "3) bankofai/claude-sonnet-4-6"
         echo "4) Custom model ID"
         echo ""
         prompt_tty default_choice "Select default model [1-4]: "
 
         case $default_choice in
-            1) DEFAULT_MODEL="ainft/gpt-5-nano" ;;
-            2) DEFAULT_MODEL="ainft/gpt-5-mini" ;;
-            3) DEFAULT_MODEL="ainft/claude-sonnet-4-6" ;;
+            1) DEFAULT_MODEL="bankofai/gpt-5.2" ;;
+            2) DEFAULT_MODEL="bankofai/gpt-5.2-mini" ;;
+            3) DEFAULT_MODEL="bankofai/claude-sonnet-4-6" ;;
             4)
-                prompt_tty custom_model "Enter custom model ID (e.g., ainft/gpt-5.2): "
+                prompt_tty custom_model "Enter custom model ID (e.g., bankofai/gpt-5.2): "
                 DEFAULT_MODEL="$custom_model"
                 ;;
-            *) DEFAULT_MODEL="ainft/gpt-5-nano" ;;
+            *) DEFAULT_MODEL="bankofai/gpt-5.2" ;;
         esac
     fi
 
@@ -483,7 +521,7 @@ if "providers" not in config["models"] or not isinstance(config["models"]["provi
 config["models"]["mode"] = "merge"
 
 provider_models = json.loads(models_json)
-config["models"]["providers"]["ainft"] = {
+config["models"]["providers"]["bankofai"] = {
     "baseUrl": base_url,
     "apiKey": api_key,
     "api": "openai-completions",
@@ -500,13 +538,13 @@ if not isinstance(allowlist, dict):
     allowlist = {}
 
 for key in list(allowlist.keys()):
-    if isinstance(key, str) and key.startswith("ainft/"):
+    if isinstance(key, str) and key.startswith(("ainft/", "bankofai/")):
         del allowlist[key]
 
 for model in provider_models:
     model_id = model.get("id")
     if model_id:
-        allowlist.setdefault(f"ainft/{model_id}", {})
+        allowlist.setdefault(f"bankofai/{model_id}", {})
 
 config["agents"]["defaults"]["models"] = allowlist
 
@@ -597,7 +635,7 @@ echo "1. Test your setup:"
 if [ -n "$DEFAULT_MODEL" ]; then
     echo "     openclaw agent --agent main --message \"你好\""
 else
-    echo "     openclaw models set ainft/gpt-5-nano"
+    echo "     openclaw models set bankofai/gpt-5.2"
     echo "     openclaw agent --agent main --message \"你好\""
 fi
 echo ""

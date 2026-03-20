@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# AINFT Setup Script for OpenClaw
-# Quickly configure AINFT AI models in OpenClaw
+# BankOfAI Setup Script for OpenClaw
+# Quickly configure BankOfAI models in OpenClaw
 
 set -e
 
@@ -53,6 +53,28 @@ check_node_version() {
     fi
 }
 
+confirm_overwrite() {
+    local target="$1"
+    local prompt="$2"
+    local answer
+
+    if [ ! -f "$target" ]; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}${prompt}${NC}"
+    read -r -p "Overwrite $target? [y/N]: " answer
+    case "$answer" in
+        y|Y|yes|YES)
+            return 0
+            ;;
+        *)
+            echo -e "${YELLOW}Skipped to avoid overwriting $target.${NC}"
+            exit 0
+            ;;
+    esac
+}
+
 if [ ! -f "$CONFIG_FILE" ]; then
     echo -e "${RED}Error: OpenClaw configuration not found at $CONFIG_FILE${NC}"
     echo -e "${YELLOW}Please install OpenClaw first: https://github.com/openclaw${NC}"
@@ -70,8 +92,9 @@ echo -e "${BLUE}Step 1: Production Configuration${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 ENVIRONMENT="prod"
-BASE_URL="https://chat.ainft.com/webapi/"
-WEB_URL="https://chat.ainft.com"
+API_BASE_URL="https://api.bankofai.io/v1"
+BASE_URL="${API_BASE_URL}/"
+WEB_URL="https://bankofai.io"
 
 echo ""
 echo -e "${GREEN}Environment fixed: $ENVIRONMENT${NC}"
@@ -83,11 +106,10 @@ echo -e "${BLUE}Step 2: Enter API Key${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "${YELLOW}Before running this script, please:${NC}"
-echo "1. Visit: ${WEB_URL}/key"
-echo "2. Create an API key"
-echo "3. API key input below is hidden (no echo)"
+echo "1. Prepare your BankOfAI API key"
+echo "2. API key input below is hidden (no echo)"
 echo ""
-read -s -p "Enter your AINFT API key: " API_KEY
+read -s -p "Enter your BankOfAI API key: " API_KEY
 echo ""
 
 if [ -z "$API_KEY" ]; then
@@ -103,15 +125,14 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${BLUE}Step 2.5: Validate API Key & Fetch Models${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-AINFT_WEB_URL="$WEB_URL" AINFT_API_KEY="$API_KEY" AINFT_MODEL_OUTPUT="$TMP_AINFT_MODEL_FILE" python3 - <<'PY'
+AINFT_API_BASE_URL="$API_BASE_URL" AINFT_API_KEY="$API_KEY" AINFT_MODEL_OUTPUT="$TMP_AINFT_MODEL_FILE" python3 - <<'PY'
 import json
 import os
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 
-web_url = os.environ["AINFT_WEB_URL"].rstrip("/")
+api_base_url = os.environ["AINFT_API_BASE_URL"].rstrip("/")
 api_key = os.environ["AINFT_API_KEY"].strip()
 output_file = os.environ["AINFT_MODEL_OUTPUT"]
 
@@ -126,19 +147,17 @@ def get_json(url: str):
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
-def normalize_name(model_id: str) -> str:
-    mapping = {
-        "claude-opus-4-6": "claude-opus-4.6",
-        "claude-opus-4-5-20251101": "claude-opus-4.5",
-        "claude-sonnet-4-6": "claude-sonnet-4.6",
-        "claude-sonnet-4-5-20250929": "claude-sonnet-4.5",
-        "claude-haiku-4-5-20251001": "claude-haiku-4.5",
-        "gemini-3.1-pro-preview": "gemini-3.1-pro",
-        "gemini-3-flash-preview": "gemini-3-flash",
-    }
-    return mapping.get(model_id, model_id)
+def provider_key_for_model(model_id):
+    lowered = model_id.lower()
+    if lowered.startswith(("gpt-", "o1", "o3", "o4", "text-embedding-", "omni-")):
+        return "openai", "OpenAI"
+    if lowered.startswith(("claude-",)):
+        return "anthropic", "Claude"
+    if lowered.startswith(("gemini-", "learnlm-")):
+        return "google", "Gemini"
+    return "other", "Other"
 
-chat_url = f"{web_url}/webapi/chat/completions"
+chat_url = f"{api_base_url}/chat/completions"
 validate_payload = {
     "model": "gpt-5-nano",
     "messages": [{"role": "user", "content": "Reply with exactly OK."}],
@@ -170,7 +189,7 @@ try:
 except urllib.error.HTTPError as exc:
     body = exc.read().decode("utf-8", errors="replace")
     if exc.code == 401:
-        print("ERROR: AINFT API key is invalid or unauthorized.", file=sys.stderr)
+        print("ERROR: BankOfAI API key is invalid or unauthorized.", file=sys.stderr)
     else:
         print(f"ERROR: API key validation failed with HTTP {exc.code}.", file=sys.stderr)
     if body:
@@ -180,42 +199,30 @@ except Exception as exc:
     print(f"ERROR: API key validation failed: {exc}", file=sys.stderr)
     raise SystemExit(1)
 
-trpc_input = urllib.parse.quote(
-    json.dumps({"0": {"json": None, "meta": {"values": ["undefined"], "v": 1}}}, separators=(",", ":"))
-)
-config_url = f"{web_url}/trpc/lambda/config.getGlobalConfig?batch=1&input={trpc_input}"
-
 try:
-    config_resp = get_json(config_url)
+    models_resp = get_json(f"{api_base_url}/models")
 except Exception as exc:
     print(f"ERROR: Failed to fetch dynamic model list: {exc}", file=sys.stderr)
     raise SystemExit(1)
 
-config_json = ((config_resp or [{}])[0].get("result") or {}).get("data", {}).get("json", {})
-providers = (config_json.get("serverConfig") or {}).get("aiProvider") or {}
-
-groups = []
-for provider_key, title in (("openai", "OpenAI"), ("anthropic", "Claude"), ("google", "Gemini")):
-    entries = []
-    for item in (providers.get(provider_key) or {}).get("serverModelLists", []) or []:
-        model_id = item.get("modelId") or item.get("id") or item.get("name")
-        if not model_id:
-            continue
-        entries.append({"id": model_id, "name": normalize_name(model_id)})
-    if entries:
-        groups.append({"key": provider_key, "title": title, "models": entries})
-
 all_models = []
 seen = set()
-for group in groups:
-    for model in group["models"]:
-        if model["id"] in seen:
-            continue
-        seen.add(model["id"])
-        all_models.append(model)
+group_map = {}
+for item in (models_resp.get("data") or []):
+    model_id = item.get("id") or item.get("name")
+    if not model_id or model_id in seen:
+        continue
+    seen.add(model_id)
+    provider_key, title = provider_key_for_model(model_id)
+    group = group_map.setdefault(provider_key, {"key": provider_key, "title": title, "models": []})
+    model = {"id": model_id, "name": model_id}
+    group["models"].append(model)
+    all_models.append(model)
+
+groups = [group_map[key] for key in ("openai", "anthropic", "google", "other") if key in group_map]
 
 if not all_models:
-    print("ERROR: No AINFT models were returned by config.getGlobalConfig.", file=sys.stderr)
+    print("ERROR: No models were returned by BankOfAI /models.", file=sys.stderr)
     raise SystemExit(1)
 
 with open(output_file, "w", encoding="utf-8") as f:
@@ -227,16 +234,17 @@ echo -e "${GREEN}Dynamic model list fetched${NC}"
 echo ""
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}Step 2.6: Write AINFT Skill Config${NC}"
+echo -e "${BLUE}Step 2.6: Write BankOfAI Skill Config${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 mkdir -p "$AINFT_CONFIG_DIR"
 if [ -f "$AINFT_CONFIG_FILE" ]; then
+    confirm_overwrite "$AINFT_CONFIG_FILE" "Existing BankOfAI config detected."
     AINFT_BACKUP="${AINFT_CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
     cp "$AINFT_CONFIG_FILE" "$AINFT_BACKUP"
-    echo -e "${GREEN}Existing AINFT config backed up: $AINFT_BACKUP${NC}"
+    echo -e "${GREEN}Existing BankOfAI config backed up: $AINFT_BACKUP${NC}"
 fi
-AINFT_API_KEY="$API_KEY" AINFT_BASE_URL="$WEB_URL" python3 - <<'PY' > "$AINFT_CONFIG_FILE"
+AINFT_API_KEY="$API_KEY" AINFT_BASE_URL="$API_BASE_URL" python3 - <<'PY' > "$AINFT_CONFIG_FILE"
 import json
 import os
 
@@ -247,7 +255,7 @@ print(json.dumps({
 }, ensure_ascii=False, indent=2))
 PY
 chmod 600 "$AINFT_CONFIG_FILE"
-echo -e "${GREEN}AINFT skill config written: $AINFT_CONFIG_FILE${NC}"
+echo -e "${GREEN}BankOfAI skill config written: $AINFT_CONFIG_FILE${NC}"
 echo ""
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -321,7 +329,7 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${BLUE}Step 4: Set Default Model (Optional)${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-read -p "Set AINFT as default model provider? [y/n]: " set_default
+read -p "Set BankOfAI as default model provider? [y/n]: " set_default
 
 DEFAULT_MODEL=""
 if [ "$set_default" = "y" ] || [ "$set_default" = "Y" ]; then
@@ -394,6 +402,7 @@ echo -e "${BLUE}Step 5: Update Configuration${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
+confirm_overwrite "$CONFIG_FILE" "OpenClaw config will be updated in place."
 BACKUP_FILE="${CONFIG_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
 cp "$CONFIG_FILE" "$BACKUP_FILE"
 echo -e "${GREEN}Backup created: $BACKUP_FILE${NC}"
@@ -544,13 +553,13 @@ fi
 
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}AINFT Setup Complete!${NC}"
+echo -e "${GREEN}BankOfAI Setup Complete!${NC}"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo -e "${BLUE}Summary:${NC}"
 echo "  Environment: $ENVIRONMENT"
 echo "  Base URL: $BASE_URL"
-echo "  AINFT Skill Config: $AINFT_CONFIG_FILE"
+echo "  BankOfAI Skill Config: $AINFT_CONFIG_FILE"
 if [ -n "$DEFAULT_MODEL" ]; then
     echo "  Default Model: $DEFAULT_MODEL"
 fi
@@ -565,9 +574,9 @@ else
 fi
 echo ""
 echo -e "${BLUE}Resources:${NC}"
-echo "  AINFT Web: $WEB_URL"
-echo "  API Key Management: ${WEB_URL}/key"
-echo "  Documentation: https://docs.apenft.io/docs/openclaw%E6%8E%A5%E5%85%A5ainft%E6%93%8D%E4%BD%9C%E6%8C%87%E5%8D%97"
+echo "  BankOfAI API: $API_BASE_URL"
+echo "  BankOfAI Web: $WEB_URL"
+echo "  Documentation: https://docs.bankofai.io/Openclaw-extension/Setup-use/"
 echo ""
 echo -e "${GREEN}Happy chatting!${NC}"
 echo ""

@@ -63,7 +63,7 @@ confirm_overwrite() {
     fi
 
     echo -e "${YELLOW}${prompt}${NC}"
-    read -r -p "Overwrite $target? [y/N]: " answer
+    prompt_tty answer "Overwrite $target? [y/N]: "
     case "$answer" in
         y|Y|yes|YES)
             return 0
@@ -73,6 +73,35 @@ confirm_overwrite() {
             exit 0
             ;;
     esac
+}
+
+prompt_tty() {
+    local __var_name="$1"
+    local __prompt="$2"
+    local __value
+
+    if [ ! -r /dev/tty ]; then
+        echo -e "${RED}Interactive input requires a TTY.${NC}"
+        exit 1
+    fi
+
+    IFS= read -r -p "$__prompt" __value < /dev/tty
+    printf -v "$__var_name" '%s' "$__value"
+}
+
+prompt_secret_tty() {
+    local __var_name="$1"
+    local __prompt="$2"
+    local __value
+
+    if [ ! -r /dev/tty ]; then
+        echo -e "${RED}Interactive input requires a TTY.${NC}"
+        exit 1
+    fi
+
+    IFS= read -r -s -p "$__prompt" __value < /dev/tty
+    echo ""
+    printf -v "$__var_name" '%s' "$__value"
 }
 
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -109,8 +138,7 @@ echo -e "${YELLOW}Before running this script, please:${NC}"
 echo "1. Prepare your BankOfAI API key"
 echo "2. API key input below is hidden (no echo)"
 echo ""
-read -s -p "Enter your BankOfAI API key: " API_KEY
-echo ""
+prompt_secret_tty API_KEY "Enter your BankOfAI API key: "
 
 if [ -z "$API_KEY" ]; then
     echo -e "${RED}API key cannot be empty. Exiting.${NC}"
@@ -267,7 +295,7 @@ echo "2) OpenAI family only"
 echo "3) Claude family only"
 echo "4) Gemini family only"
 echo ""
-read -p "Select models [1-4]: " model_choice
+prompt_tty model_choice "Select models [1-4]: "
 
 case $model_choice in
     1)
@@ -329,7 +357,7 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${BLUE}Step 4: Set Default Model (Optional)${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-read -p "Set BankOfAI as default model provider? [y/n]: " set_default
+prompt_tty set_default "Set BankOfAI as default model provider? [y/n]: "
 
 DEFAULT_MODEL=""
 if [ "$set_default" = "y" ] || [ "$set_default" = "Y" ]; then
@@ -360,12 +388,12 @@ EOF
         custom_idx=$((${#ENABLED_MODELS[@]} + 1))
         echo "$custom_idx) Custom model ID"
         echo ""
-        read -p "Select default model [1-$custom_idx]: " default_choice
+        prompt_tty default_choice "Select default model [1-$custom_idx]: "
 
         if [[ "$default_choice" =~ ^[0-9]+$ ]] && [ "$default_choice" -ge 1 ] && [ "$default_choice" -le "${#ENABLED_MODELS[@]}" ]; then
             DEFAULT_MODEL="${ENABLED_MODELS[$((default_choice - 1))]}"
         elif [ "$default_choice" = "$custom_idx" ]; then
-            read -p "Enter custom model ID (e.g., ainft/gpt-5.2): " custom_model
+            prompt_tty custom_model "Enter custom model ID (e.g., ainft/gpt-5.2): "
             DEFAULT_MODEL="$custom_model"
         else
             DEFAULT_MODEL="${ENABLED_MODELS[0]}"
@@ -377,14 +405,14 @@ EOF
         echo "3) ainft/claude-sonnet-4-6"
         echo "4) Custom model ID"
         echo ""
-        read -p "Select default model [1-4]: " default_choice
+        prompt_tty default_choice "Select default model [1-4]: "
 
         case $default_choice in
             1) DEFAULT_MODEL="ainft/gpt-5-nano" ;;
             2) DEFAULT_MODEL="ainft/gpt-5-mini" ;;
             3) DEFAULT_MODEL="ainft/claude-sonnet-4-6" ;;
             4)
-                read -p "Enter custom model ID (e.g., ainft/gpt-5.2): " custom_model
+                prompt_tty custom_model "Enter custom model ID (e.g., ainft/gpt-5.2): "
                 DEFAULT_MODEL="$custom_model"
                 ;;
             *) DEFAULT_MODEL="ainft/gpt-5-nano" ;;

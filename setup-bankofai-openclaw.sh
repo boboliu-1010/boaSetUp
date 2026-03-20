@@ -170,8 +170,8 @@ def post_raw(url, payload, headers=None):
     with urllib.request.urlopen(req, timeout=20) as resp:
         return resp.status, dict(resp.headers), resp.read().decode("utf-8", errors="replace")
 
-def get_json(url: str):
-    req = urllib.request.Request(url, method="GET")
+def get_json(url: str, headers=None):
+    req = urllib.request.Request(url, headers=headers or {}, method="GET")
     with urllib.request.urlopen(req, timeout=20) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -228,7 +228,7 @@ except Exception as exc:
     raise SystemExit(1)
 
 try:
-    models_resp = get_json(f"{api_base_url}/models")
+    models_resp = get_json(f"{api_base_url}/models", headers=headers)
 except Exception as exc:
     print(f"ERROR: Failed to fetch dynamic model list: {exc}", file=sys.stderr)
     raise SystemExit(1)

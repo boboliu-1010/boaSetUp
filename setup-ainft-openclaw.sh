@@ -103,18 +103,19 @@ echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${BLUE}Step 2.5: Validate API Key & Fetch Models${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-python3 - "$WEB_URL" "$API_KEY" "$TMP_AINFT_MODEL_FILE" <<'PY'
+AINFT_WEB_URL="$WEB_URL" AINFT_API_KEY="$API_KEY" AINFT_MODEL_OUTPUT="$TMP_AINFT_MODEL_FILE" python3 - <<'PY'
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
-web_url = sys.argv[1].rstrip("/")
-api_key = sys.argv[2].strip()
-output_file = sys.argv[3]
+web_url = os.environ["AINFT_WEB_URL"].rstrip("/")
+api_key = os.environ["AINFT_API_KEY"].strip()
+output_file = os.environ["AINFT_MODEL_OUTPUT"]
 
-def post_raw(url: str, payload: dict, headers: dict | None = None):
+def post_raw(url, payload, headers=None):
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers=headers or {}, method="POST")
     with urllib.request.urlopen(req, timeout=20) as resp:
@@ -235,13 +236,16 @@ if [ -f "$AINFT_CONFIG_FILE" ]; then
     cp "$AINFT_CONFIG_FILE" "$AINFT_BACKUP"
     echo -e "${GREEN}Existing AINFT config backed up: $AINFT_BACKUP${NC}"
 fi
-cat > "$AINFT_CONFIG_FILE" <<EOF
-{
-  "api_key": "$API_KEY",
-  "base_url": "$WEB_URL",
-  "timeout_ms": 15000
-}
-EOF
+AINFT_API_KEY="$API_KEY" AINFT_BASE_URL="$WEB_URL" python3 - <<'PY' > "$AINFT_CONFIG_FILE"
+import json
+import os
+
+print(json.dumps({
+    "api_key": os.environ["AINFT_API_KEY"],
+    "base_url": os.environ["AINFT_BASE_URL"],
+    "timeout_ms": 15000,
+}, ensure_ascii=False, indent=2))
+PY
 chmod 600 "$AINFT_CONFIG_FILE"
 echo -e "${GREEN}AINFT skill config written: $AINFT_CONFIG_FILE${NC}"
 echo ""
@@ -414,121 +418,92 @@ else:
 PY
 )"
 
-PYTHON_SCRIPT=$(cat <<'PYTHON_EOF'
+AINFT_CONFIG_FILE_PATH="$CONFIG_FILE" \
+AINFT_PROVIDER_BASE_URL="$BASE_URL" \
+AINFT_PROVIDER_API_KEY="$API_KEY" \
+AINFT_PROVIDER_MODELS="$MODELS" \
+AINFT_DEFAULT_MODEL="$DEFAULT_MODEL" \
+python3 - <<'PY'
 import json
-import sys
+import os
+import tempfile
 
-config_file = sys.argv[1]
-base_url = sys.argv[2]
-api_key = sys.argv[3]
-models_json = sys.argv[4]
-default_model = sys.argv[5] if len(sys.argv) > 5 else ""
+config_file = os.environ["AINFT_CONFIG_FILE_PATH"]
+base_url = os.environ["AINFT_PROVIDER_BASE_URL"]
+api_key = os.environ["AINFT_PROVIDER_API_KEY"]
+models_json = os.environ["AINFT_PROVIDER_MODELS"]
+default_model = os.environ.get("AINFT_DEFAULT_MODEL", "")
 
-with open(config_file, 'r') as f:
+with open(config_file, "r", encoding="utf-8") as f:
     config = json.load(f)
 
-if 'models' not in config:
-    config['models'] = {}
+if "models" not in config or not isinstance(config["models"], dict):
+    config["models"] = {}
 
-if 'providers' not in config['models']:
-    config['models']['providers'] = {}
+if "providers" not in config["models"] or not isinstance(config["models"]["providers"], dict):
+    config["models"]["providers"] = {}
 
-config['models']['mode'] = 'merge'
+config["models"]["mode"] = "merge"
 
 provider_models = json.loads(models_json)
-config['models']['providers']['ainft'] = {
-    'baseUrl': base_url,
-    'apiKey': api_key,
-    'api': 'openai-completions',
-    'models': provider_models
+config["models"]["providers"]["ainft"] = {
+    "baseUrl": base_url,
+    "apiKey": api_key,
+    "api": "openai-completions",
+    "models": provider_models,
 }
 
-if 'agents' not in config:
-    config['agents'] = {}
-if 'default' in config['agents']:
-    del config['agents']['default']
-if 'defaults' not in config['agents']:
-    config['agents']['defaults'] = {}
+if "agents" not in config or not isinstance(config["agents"], dict):
+    config["agents"] = {}
+if "defaults" not in config["agents"] or not isinstance(config["agents"]["defaults"], dict):
+    config["agents"]["defaults"] = {}
 
-allowlist = config['agents']['defaults'].get('models')
+allowlist = config["agents"]["defaults"].get("models")
 if not isinstance(allowlist, dict):
     allowlist = {}
 
 for key in list(allowlist.keys()):
-    if isinstance(key, str) and key.startswith('ainft/'):
+    if isinstance(key, str) and key.startswith("ainft/"):
         del allowlist[key]
 
-for m in provider_models:
-    mid = m.get('id')
-    if mid:
-        allowlist.setdefault(f'ainft/{mid}', {})
+for model in provider_models:
+    model_id = model.get("id")
+    if model_id:
+        allowlist.setdefault(f"ainft/{model_id}", {})
 
-config['agents']['defaults']['models'] = allowlist
+config["agents"]["defaults"]["models"] = allowlist
 
 if default_model:
-    if 'defaults' not in config['agents'] or not isinstance(config['agents']['defaults'], dict):
-        config['agents']['defaults'] = {}
-    model_cfg = config['agents']['defaults'].get('model')
+    model_cfg = config["agents"]["defaults"].get("model")
     if not isinstance(model_cfg, dict):
         model_cfg = {}
-    model_cfg['primary'] = default_model
-    config['agents']['defaults']['model'] = model_cfg
+    model_cfg["primary"] = default_model
+    config["agents"]["defaults"]["model"] = model_cfg
 
-    agent_list = config['agents'].get('list')
+    agent_list = config["agents"].get("list")
     if isinstance(agent_list, list):
         for agent in agent_list:
-            if isinstance(agent, dict) and agent.get('id') == 'main':
-                agent['model'] = default_model
+            if isinstance(agent, dict) and agent.get("id") == "main":
+                agent["model"] = default_model
                 break
 
-with open(config_file, 'w') as f:
-    json.dump(config, f, indent=2)
+config_dir = os.path.dirname(config_file) or "."
+fd, temp_path = tempfile.mkstemp(prefix=".openclaw.", suffix=".json", dir=config_dir)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    os.replace(temp_path, config_file)
+except Exception:
+    try:
+        os.unlink(temp_path)
+    except OSError:
+        pass
+    raise
 
 print("Configuration updated successfully!")
-PYTHON_EOF
-)
-
-if command -v python3 &> /dev/null; then
-    echo "$PYTHON_SCRIPT" | python3 - "$CONFIG_FILE" "$BASE_URL" "$API_KEY" "$MODELS" "$DEFAULT_MODEL"
-    echo -e "${GREEN}Configuration updated${NC}"
-else
-    echo -e "${RED}Python 3 not found. Manual configuration required.${NC}"
-    echo ""
-    echo "Please add this to your $CONFIG_FILE:"
-    echo ""
-    cat <<EOF
-{
-  "models": {
-    "mode": "merge",
-    "providers": {
-      "ainft": {
-        "baseUrl": "$BASE_URL",
-        "apiKey": "$API_KEY",
-        "api": "openai-completions",
-        "models": $MODELS
-      }
-    }
-  }
-}
-EOF
-    if [ -n "$DEFAULT_MODEL" ]; then
-        echo ""
-        echo "And set default model:"
-        echo ""
-        cat <<EOF
-{
-  "agents": {
-    "defaults": {
-      "model": {
-        "primary": "$DEFAULT_MODEL"
-      }
-    }
-  }
-}
-EOF
-    fi
-    exit 1
-fi
+PY
+echo -e "${GREEN}Configuration updated${NC}"
 
 echo ""
 
